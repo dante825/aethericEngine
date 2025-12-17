@@ -156,12 +156,12 @@ class AethericEngineClient:
             logger.debug(f"Binary payload size (big-endian): {payload_size} bytes (0x{payload_size:x})")
             
             # Check if payload size is reasonable (max 10MB)
-            if payload_size > 10_000_000:
-                logger.debug(f"Payload size suspiciously large, trying little-endian instead...")
-                payload_size = 0
-                for i, byte in enumerate(reversed(list(length_bytes))):
-                    payload_size |= (byte << (i * 8))
-                logger.debug(f"Little-endian size: {payload_size} bytes (0x{payload_size:x})")
+            # if payload_size > 10_000_000:
+            #     logger.debug(f"Payload size suspiciously large, trying little-endian instead...")
+            #     payload_size = 0
+            #     for i, byte in enumerate(reversed(list(length_bytes))):
+            #         payload_size |= (byte << (i * 8))
+            #     logger.debug(f"Little-endian size: {payload_size} bytes (0x{payload_size:x})")
                 
             total_message_size = 1 + BINARY_LENGTH_SIZE + payload_size
             logger.debug(f"Total message size needed: {total_message_size}, have: {len(data) - current_pos}")
@@ -216,7 +216,7 @@ class AethericEngineClient:
             logger.info(f"Connection established in {connect_time:.2f}s. Authenticating...")
 
             
-            # 1. Authenticate (Command format: "AUTH JWT_Token" followed by CRLF)
+            # 1. Authenticate (Command format: "AUTH JWT_Token" 
             auth_command = f"AUTH {self.jwt}"
             sock.send(auth_command.encode('ascii'))
             logger.info(f"Sent: '{auth_command}'")
