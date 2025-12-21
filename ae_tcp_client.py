@@ -13,7 +13,11 @@ load_dotenv()
 logging.basicConfig(
     level=logging.DEBUG,
     format='[%(asctime)s.%(msecs)02d] [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler('aetheric_engine_client.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -24,7 +28,7 @@ SERVER_IP = os.getenv('SERVER_IP')
 SERVER_PORT = os.getenv('SERVER_PORT')
 CURATOR_JWT = os.getenv('CURATOR_JWT')
 
-MAX_MESSAGES = 5
+MAX_MESSAGES = 600
 DB_NAME = "aetheric_engine_data.db"
 
 # Protocol Markers (From Prof Oshibotsu's Journal)
