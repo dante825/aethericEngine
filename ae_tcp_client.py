@@ -3,7 +3,6 @@ import sys
 import sqlite3
 import time
 import logging
-from io import BytesIO
 from dotenv import load_dotenv
 import os
 
@@ -91,18 +90,20 @@ class AethericEngineClient:
         self.message_count += 1
         logger.info(f"[{self.message_count}/{self.max_msgs}] Stored Binary Message. Payload length: {len(payload)} bytes.")
         
-    def try_parse_message(self, buffer: BytesIO) -> bool:
+    def try_parse_message(self, buffer: bytearray, pos: int) -> tuple[bool, int]:
         """
-        Attempts to read a complete message (ASCII or Binary) from the buffer.
-        Returns True if a message was successfully parsed and stored, False otherwise.
+        Attempts to read a complete message (ASCII or Binary) from the buffer starting at position pos.
+        Returns (message_found: bool, bytes_consumed: int).
+        If a message is found, bytes_consumed is the number of bytes to skip.
+        If no message is found, returns (False, 0).
         """
         # Read all data currently in the buffer
-        data = buffer.getvalue()
-        current_pos = buffer.tell()
+        data = buffer
+        current_pos = pos
         
         # Must have at least 1 byte to check for header
         if len(data) <= current_pos:
-            return False
+            return (False, 0)
 
         # Debug: Show what byte we're looking at
         current_byte = data[current_pos:current_pos+1]
@@ -114,88 +115,105 @@ class AethericEngineClient:
             try:
                 # Find the end marker ';'
                 end_index = data.index(ASCII_END, current_pos + 1)
-                
-                # Payload is between $ and ;
-                payload = data[current_pos + 1 : end_index]
-                logger.debug(f"ASCII payload length: {len(payload)}")
-                
-                # Check for minimum length constraint (5 or more random printable ASCII)
-                if len(payload) >= 5:
-                    self.store_ascii(payload)
-                    buffer.seek(end_index + 1) # Advance buffer position past ';'
-                    return True
-                else:
-                    logger.debug(f"ASCII payload too short: {len(payload)} bytes (need 5+)")
-                # Else: If payload is too short, treat as an error or unexpected format and skip
-                # For this implementation, we assume a valid message will meet the minimum length.
-                
-            except ValueError as e:
+            except ValueError:
                 # End marker not found in current buffer chunk, need more data
-                logger.debug(f"ASCII_END marker not found, need more data. Error: {e}")
-                return False
+                logger.debug(f"ASCII_END marker not found, need more data")
+                return (False, 0)
+            
+            # Payload is between $ and ;
+            payload = data[current_pos + 1 : end_index]
+            logger.debug(f"ASCII payload length: {len(payload)}")
+            
+            # Check for minimum length constraint (5 or more random printable ASCII)
+            if len(payload) >= 5:
+                try:
+                    self.store_ascii(payload)
+                    bytes_consumed = end_index + 1 - current_pos  # Advance past ';'
+                    logger.debug(f"Stored ASCII message, bytes consumed: {bytes_consumed}")
+                    return (True, bytes_consumed)
+                except UnicodeDecodeError as e:
+                    # Payload contains non-ASCII bytes, skip this malformed message
+                    logger.warning(f"ASCII message at position {current_pos} contains non-ASCII bytes: {e}. Skipping.")
+                    bytes_consumed = end_index + 1 - current_pos
+                    return (False, bytes_consumed)  # Skip this malformed message
+            else:
+                logger.debug(f"ASCII payload too short: {len(payload)} bytes (need 5+)")
+                # Skip the $ marker and continue looking
+                return (False, 1)
 
-        # --- 2. Attempt to parse Binary message (0xAA + 5-byte length + payload) ---
+        # --- 2. Attempt to parse Binary message (0xAA + 5-byte payload) ---
         elif current_byte == BINARY_HEADER:
             logger.debug(f"Found BINARY_HEADER (0xAA) at position {current_pos}")
             
-            # Check for enough data to read header (1 byte) + length field (5 bytes)
-            required_for_length = current_pos + 1 + BINARY_LENGTH_SIZE
-            if len(data) < required_for_length:
-                logger.debug(f"Need {required_for_length} bytes for binary header, only have {len(data)}")
-                return False 
-            
-            # Read the 5-byte payload size
-            length_bytes = data[current_pos + 1 : required_for_length]
-            logger.debug(f"Raw length bytes (hex): {length_bytes.hex()}")
-            
-            # Manual 5-byte Big-Endian (Network Byte Order) conversion to integer
-            payload_size = 0
-            for byte in length_bytes:
-                payload_size = (payload_size << 8) | byte
-            
-            logger.debug(f"Binary payload size (big-endian): {payload_size} bytes (0x{payload_size:x})")
-            
-            # Check if payload size is reasonable (max 10MB)
-            # if payload_size > 10_000_000:
-            #     logger.debug(f"Payload size suspiciously large, trying little-endian instead...")
-            #     payload_size = 0
-            #     for i, byte in enumerate(reversed(list(length_bytes))):
-            #         payload_size |= (byte << (i * 8))
-            #     logger.debug(f"Little-endian size: {payload_size} bytes (0x{payload_size:x})")
-                
-            total_message_size = 1 + BINARY_LENGTH_SIZE + payload_size
-            logger.debug(f"Total message size needed: {total_message_size}, have: {len(data) - current_pos}")
-            
+            # Check for enough data: 1 byte header + 5 bytes payload = 6 bytes total
+            total_message_size = 1 + BINARY_LENGTH_SIZE  # 1 (header) + 5 (payload)
             if len(data) < current_pos + total_message_size:
                 logger.debug(f"Incomplete message: need {current_pos + total_message_size} bytes total, only have {len(data)}")
-                return False # Not enough data for the full payload
+                return (False, 0)
             
-            logger.info(f"Parsing complete binary message of {payload_size} bytes at position {current_pos}")
-                
-            # Read only the first 5 bytes of the payload (randomly generated octet)
-            payload_start = required_for_length
-            payload_end = payload_start + 5  # Only take first 5 bytes
-            
-            if len(data) < payload_end:
-                logger.debug(f"Need at least {payload_end} bytes for 5-byte payload, only have {len(data)}")
-                return False
+            # Read exactly 5 bytes after the 0xAA header
+            payload_start = current_pos + 1
+            payload_end = payload_start + BINARY_LENGTH_SIZE  # 5 bytes
             
             payload = data[payload_start : payload_end]
-            logger.debug(f"Extracted 5-byte payload: {payload.hex()}")
+            logger.debug(f"Extracted 5-byte binary payload: {payload.hex()}")
             
             self.store_binary(payload)
-            # Advance buffer position past the header + length field + 5 bytes of payload
-            buffer.seek(payload_end)
-            return True
+            # Return bytes consumed (header + payload = 6 bytes)
+            bytes_consumed = total_message_size
+            return (True, bytes_consumed)
 
         # --- 3. Neither message type found at current position ---
         else:
             # If the current byte is not a known start marker, it could be a piece of server ACK/NACK
-            # from the 'AUTH' command. We will skip it to try and find the next message start.
-            logger.debug(f"Unknown byte at position {current_pos}: {current_byte.hex() if current_byte else 'EMPTY'}, skipping")
-            buffer.seek(current_pos + 1)
-            logger.warning(f"Skipping unknown byte at position {current_pos}.")
+            # from the 'AUTH' command. We will skip ahead to find the next message start marker.
+            try:
+                # Find the next $ or 0xAA marker
+                next_ascii = data.find(ASCII_START, current_pos + 1)
+                next_binary = data.find(BINARY_HEADER, current_pos + 1)
+                
+                # Find which comes first
+                next_pos = None
+                if next_ascii != -1 and next_binary != -1:
+                    next_pos = min(next_ascii, next_binary)
+                elif next_ascii != -1:
+                    next_pos = next_ascii
+                elif next_binary != -1:
+                    next_pos = next_binary
+                
+                if next_pos is not None:
+                    bytes_to_skip = next_pos - current_pos
+                    logger.debug(f"Skipping {bytes_to_skip} unknown bytes at position {current_pos} to reach next marker at {next_pos}")
+                    return (False, bytes_to_skip)
+                else:
+                    # No marker found ahead, skip rest of buffer
+                    logger.debug(f"No message markers found ahead, skipping remaining {len(data) - current_pos} bytes")
+                    return (False, len(data) - current_pos)
+            except Exception as e:
+                logger.warning(f"Error while looking for next marker: {e}. Skipping 1 byte.")
+                return (False, 1)
+
+    def parse_message(self, response_data: bytes) -> None:
+        """
+        Parses and logs server response data in ASCII format.
         
+        Args:
+            response_data: The raw bytes received from the server.
+        """
+        logger.info(f"Raw response ({len(response_data)} bytes): {response_data}")
+        
+        # Try to decode as ASCII
+        try:
+            ascii_text = response_data.decode('ascii', errors='replace')
+            logger.info(f"ASCII decoded: {ascii_text}")
+        except Exception as e:
+            logger.error(f"Failed to decode response as ASCII: {e}")
+        
+        # Log hex representation
+        # hex_repr = response_data.hex()
+        # logger.info(f"Hex representation: {hex_repr}")
+
+
     def run(self):
         """Connects, authenticates, listens, parses, and stores messages."""
         
@@ -221,8 +239,9 @@ class AethericEngineClient:
             sock.send(auth_command.encode('ascii'))
             logger.info(f"Sent: '{auth_command}'")
             
-            # # Use BytesIO to handle the continuous stream of incoming data
-            buffer = BytesIO()
+            # Use bytearray to handle the continuous stream of incoming data
+            buffer = bytearray()
+            buffer_pos = 0
             first_message_time = None
             last_message_time = time.time()
                         
@@ -242,32 +261,28 @@ class AethericEngineClient:
                     last_message_time = time.time()
                     logger.debug(f"Received {len(chunk)} bytes")
                     
-                    # Add new data to the buffer and rewind to start processing
-                    buffer.write(chunk)
-                    buffer.seek(0) 
+                    # Add new data to the buffer
+                    buffer.extend(chunk)
                     
                     messages_processed_in_chunk = 0
-                    while True:
-                        current_pos = buffer.tell()
+                    while buffer_pos < len(buffer):
+                        # Try to parse a message at current position
+                        found, bytes_consumed = self.try_parse_message(buffer, buffer_pos)
                         
-                        if current_pos >= len(buffer.getvalue()):
-                            # Reached the end of the data we've read so far
+                        if not found and bytes_consumed == 0:
+                            # No complete message found, need more data
                             logger.debug(f"Processed {messages_processed_in_chunk} message(s) from this chunk")
                             break
-                            
-                        if self.try_parse_message(buffer):
+                        
+                        buffer_pos += bytes_consumed
+                        if found:
                             messages_processed_in_chunk += 1
-                            continue # Successfully parsed a message, check for another immediately
-                        
-                        # No complete message found at current_pos
-                        remaining_data = buffer.read()
-                        
-                        # Clear and refill the buffer with only the remaining data
-                        buffer.seek(0)
-                        buffer.truncate(0)
-                        buffer.write(remaining_data)
-                        logger.debug(f"Buffering {len(remaining_data)} bytes for next chunk")
-                        break 
+                    
+                    # Remove processed data from buffer
+                    if buffer_pos > 0:
+                        del buffer[:buffer_pos]
+                        buffer_pos = 0
+                        logger.debug(f"Removed {buffer_pos} bytes from buffer, {len(buffer)} bytes remaining") 
                         
                 except socket.timeout:
                     logger.warning(f"Socket read timed out after {TIMEOUT}s with no data. Total messages received: {self.message_count}")
@@ -299,6 +314,24 @@ class AethericEngineClient:
 
         except socket.error as e:
             logger.error(f"A critical socket error occurred: {e}. Check IP/Port and network connectivity.")
+            
+        except KeyboardInterrupt:
+            logger.warning("Interrupted by user (Ctrl-C). Cleaning up gracefully...")
+            try:
+                logger.info('Sending STATUS command to server.')
+                sock.sendall(b"STATUS\r\n")
+                logger.info("Draining TCP pipe for 2 seconds...")
+                sock.settimeout(2) 
+                while True:
+                    try:
+                        drain_chunk = sock.recv(4096)
+                        if not drain_chunk:
+                            break 
+                        logger.debug(f"Drained {len(drain_chunk)} bytes.")
+                    except socket.timeout:
+                        break 
+            except Exception as e:
+                logger.debug(f"Error during graceful shutdown: {e}")
             
         except Exception as e:
             logger.error(f"An unexpected error occurred: {e}")
