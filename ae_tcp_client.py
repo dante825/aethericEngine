@@ -136,16 +136,23 @@ class AethericEngineClient:
             
             # Check for minimum length constraint (5 or more random printable ASCII)
             if len(payload) >= 5:
-                try:
-                    self.store_ascii(payload)
-                    bytes_consumed = end_index + 1 - current_pos  # Advance past ';'
-                    logger.debug(f"Stored ASCII message, bytes consumed: {bytes_consumed}")
-                    return (True, bytes_consumed)
-                except UnicodeDecodeError as e:
-                    # Payload contains non-ASCII bytes, skip this malformed message
-                    logger.warning(f"ASCII message at position {current_pos} contains non-ASCII bytes: {e}. Skipping.")
+                # Validate that payload contains only printable ASCII (32-126)
+                if all(32 <= b < 127 for b in payload):
+                    try:
+                        self.store_ascii(payload)
+                        bytes_consumed = end_index + 1 - current_pos  # Advance past ';'
+                        logger.debug(f"Stored ASCII message, bytes consumed: {bytes_consumed}")
+                        return (True, bytes_consumed)
+                    except UnicodeDecodeError as e:
+                        # Payload contains non-ASCII bytes, skip this malformed message
+                        logger.warning(f"ASCII message at position {current_pos} contains non-ASCII bytes: {e}. Skipping.")
+                        bytes_consumed = end_index + 1 - current_pos
+                        return (False, bytes_consumed)  # Skip this malformed message
+                else:
+                    # Payload contains non-printable ASCII bytes, likely a false positive from binary data
+                    logger.debug(f"ASCII message at position {current_pos} contains non-printable bytes, skipping as false positive.")
                     bytes_consumed = end_index + 1 - current_pos
-                    return (False, bytes_consumed)  # Skip this malformed message
+                    return (False, bytes_consumed)  # Skip this false positive
             else:
                 logger.debug(f"ASCII payload too short: {len(payload)} bytes (need 5+)")
                 # Skip the $ marker and continue looking
