@@ -3,11 +3,17 @@ import sys
 import sqlite3
 import time
 import logging
+from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 import os
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Create logs directory if it doesn't exist
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
 
 # Configure logging
 logging.basicConfig(
@@ -15,7 +21,7 @@ logging.basicConfig(
     format='[%(asctime)s.%(msecs)02d] [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler('aetheric_engine_client.log'),
+        RotatingFileHandler('logs/aetheric_engine_client.log', maxBytes=10485760, backupCount=5),
         logging.StreamHandler()
     ]
 )
@@ -28,7 +34,7 @@ SERVER_IP = os.getenv('SERVER_IP')
 SERVER_PORT = os.getenv('SERVER_PORT')
 CURATOR_JWT = os.getenv('CURATOR_JWT')
 
-MAX_MESSAGES = 600
+MAX_MESSAGES = 1200
 DB_NAME = "aetheric_engine_data.db"
 
 # Protocol Markers (From Prof Oshibotsu's Journal)
