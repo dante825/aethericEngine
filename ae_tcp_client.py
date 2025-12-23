@@ -197,27 +197,6 @@ class AethericEngineClient:
                 logger.warning(f"Error while looking for next marker: {e}. Skipping 1 byte.")
                 return (False, 1)
 
-    def parse_message(self, response_data: bytes) -> None:
-        """
-        Parses and logs server response data in ASCII format.
-        
-        Args:
-            response_data: The raw bytes received from the server.
-        """
-        logger.info(f"Raw response ({len(response_data)} bytes): {response_data}")
-        
-        # Try to decode as ASCII
-        try:
-            ascii_text = response_data.decode('ascii', errors='replace')
-            logger.info(f"ASCII decoded: {ascii_text}")
-        except Exception as e:
-            logger.error(f"Failed to decode response as ASCII: {e}")
-        
-        # Log hex representation
-        # hex_repr = response_data.hex()
-        # logger.info(f"Hex representation: {hex_repr}")
-
-
     def run(self):
         """Connects, authenticates, listens, parses, and stores messages."""
         
